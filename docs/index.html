@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>국감 질의서 아카이브 스킬</title>
+<meta name="description" content="국정감사 질의서(한글 문서)를 구글 드라이브에 쌓고 파싱해 카드로 정리하고, 팀이 Claude로 꺼내 쓰게 하는 스킬 모음 안내">
+<style>
+/* 한 장짜리 안내 페이지. 외부 파일 없이 열린다. 색은 토큰으로 두고 라이트/다크 모두 정의한다. */
+:root {
+  --bg: #f6f7f8; --surface: #ffffff; --ink: #17212b; --muted: #566372; --line: #d9e0e6;
+  --accent: #0a6b6b; --accent-ink: #ffffff; --accent-soft: #dff0ef;
+  --warn: #8f5200; --warn-soft: #fbecd2; --code-bg: #edf1f4;
+  --font: "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11171c; --surface: #182027; --ink: #e6ebef; --muted: #9ba8b5; --line: #2b353e;
+    --accent: #5fc7c2; --accent-ink: #062a29; --accent-soft: #17312f;
+    --warn: #f2b865; --warn-soft: #3a2c12; --code-bg: #0e1317; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11171c; --surface: #182027; --ink: #e6ebef; --muted: #9ba8b5; --line: #2b353e;
+  --accent: #5fc7c2; --accent-ink: #062a29; --accent-soft: #17312f;
+  --warn: #f2b865; --warn-soft: #3a2c12; --code-bg: #0e1317; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--font); padding: 0 max(16px, env(safe-area-inset-left, 0px)) 72px max(16px, env(safe-area-inset-left, 0px)); }
+.wrap { max-width: 880px; margin: 0 auto; }
+header { padding: 56px 0 28px; }
+h1 { font-size: clamp(26px, 5vw, 36px); line-height: 1.3; margin: 0 0 12px; font-weight: 700; text-wrap: balance; }
+h2 { font-size: 22px; margin: 52px 0 14px; font-weight: 700; text-wrap: balance; }
+h3 { font-size: 17px; margin: 0 0 6px; font-weight: 600; }
+p { margin: 0 0 12px; }
+.lede { font-size: 18px; color: var(--muted); max-width: 62ch; }
+.muted { color: var(--muted); }
+a { color: var(--accent); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code { font: 14px var(--mono); background: var(--code-bg); padding: 1px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+.links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.btn { display: inline-block; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); text-decoration: none; font-size: 15px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+
+.set { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; min-width: 0; }
+.card .where { font-family: var(--mono); font-size: 13px; color: var(--accent); margin-bottom: 4px; }
+.card p { color: var(--muted); font-size: 15px; margin: 0; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); margin-top: 10px; }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
+
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: s; display: grid; gap: 10px; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.steps li::before { content: counter(s); width: 30px; height: 30px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-size: 14px; }
+.steps strong { display: block; }
+.steps span { color: var(--muted); font-size: 15px; }
+
+.say { display: grid; gap: 10px; }
+.say div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+.say small { display: block; color: var(--muted); font-size: 13px; margin-bottom: 2px; }
+
+.codewrap { position: relative; margin: 0 0 14px; }
+pre { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font: 14px/1.65 var(--mono); }
+.copy { position: absolute; top: 8px; right: 8px; font: 13px var(--font); padding: 3px 10px; border-radius: 5px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+
+.name { font: 15px/1.9 var(--mono); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; overflow-x: auto; white-space: nowrap; }
+.name b { font-weight: 600; padding: 2px 6px; border-radius: 4px; }
+.n1 { background: var(--accent-soft); color: var(--accent); }
+.n2 { background: var(--warn-soft); color: var(--warn); }
+.n3 { background: var(--code-bg); }
+table { width: 100%; border-collapse: collapse; font-size: 15px; margin-top: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.scroll { overflow-x: auto; }
+
+.rules { margin: 0; padding-left: 20px; }
+.rules li { margin-bottom: 8px; }
+footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>국감 질의서 아카이브 스킬</h1>
+  <p class="lede">국정감사 질의서(한글 문서)를 구글 드라이브에 쌓고, 파싱하고, 카드로 정리해서 팀이 Claude로 꺼내 쓰게 합니다. 서버나 별도 협업 서비스는 필요 없습니다.</p>
+  <div class="links">
+    <a class="btn primary" href="https://github.com/yongkyu4803/audit-question-archive">GitHub 저장소</a>
+    <a class="btn" href="https://github.com/yongkyu4803/audit-question-archive#readme">사용설명서 (README)</a>
+  </div>
+</header>
+
+<main>
+
+<section aria-labelledby="set">
+  <h2 id="set">한 세트는 세 파일</h2>
+  <div class="set">
+    <div class="card"><div class="where">Drive · 원본/</div><h3>한글 원본</h3><p>올린 이름 그대로. 팀원에게는 파일명만 안내합니다.</p><span class="tag warn">관리자만</span></div>
+    <div class="card"><div class="where">Drive · 파싱/</div><h3>파싱본</h3><p>kordoc으로 만든 마크다운. 질의서 본문 전체가 들어갑니다.</p><span class="tag">팀원 읽기</span></div>
+    <div class="card"><div class="where">Drive · 카드/</div><h3>메타 카드 + 목록</h3><p>질의 요지, 핵심 수치, 후속, 회신 상태. <code>_INDEX.md</code>가 전체 목록입니다.</p><span class="tag">팀원 읽기</span></div>
+  </div>
+  <p class="muted" style="margin-top:14px">세 파일은 같은 id로 묶이고, 파싱본과 카드의 맨 위에 어느 Drive 원본에서 나왔는지(파일명·파일 id·링크·해시)가 적힙니다.</p>
+</section>
+
+<section aria-labelledby="admin">
+  <h2 id="admin">관리자: 새 질의서 처리 7단계</h2>
+  <p class="muted">Claude Code에서 “원본 폴더에 새 질의서 올라왔는지 확인하고 처리해줘”라고 하면 <code>audit-question-sync</code> 스킬이 아래 순서로 진행합니다.</p>
+  <ol class="steps">
+    <li><div><strong>새 원본 찾기</strong><span>Drive <code>원본/</code>을 끝까지 조회해 처리기록과 비교합니다. 바뀌거나 사라진 원본은 자동 처리하지 않고 알립니다.</span></div></li>
+    <li><div><strong>내려받기와 메타 확정</strong><span>파일명 규칙에서 상임위·기관·질의자·제출일·유형을 읽고 확인받습니다. 규칙 밖이면 묻습니다. 추측하지 않습니다.</span></div></li>
+    <li><div><strong>파싱과 카드 뼈대</strong><span>kordoc으로 파싱본을 만들고 카드 뼈대와 처리기록을 만듭니다.</span></div></li>
+    <li><div><strong>카드 채우기</strong><span>파싱본을 읽고 질의 요지, 핵심 수치(원문 표기 그대로), 주제를 적습니다.</span></div></li>
+    <li><div><strong>개인정보·공개 구분 확인 (사람)</strong><span>확인 전에는 올리지 않습니다. 비공개 건도 올리지 않습니다.</span></div></li>
+    <li><div><strong>Drive에 올리기</strong><span>카드·파싱본·목록을 올립니다. 내용이 바뀐 파일은 새로 올린 뒤 옛 파일을 휴지통으로 보냅니다.</span></div></li>
+    <li><div><strong>점검과 보고</strong><span><code>check.py</code>가 오류 0이어야 끝납니다. 처리한 건, 올린 건, 대기 중인 건을 보고합니다.</span></div></li>
+  </ol>
+</section>
+
+<section aria-labelledby="team">
+  <h2 id="team">팀원: 이렇게 물어보세요</h2>
+  <div class="say">
+    <div><small>기관으로 찾기</small>“작년 가나다진흥원에 낸 질의서 뭐였지?”</div>
+    <div><small>내용으로 찾기</small>“집행률 90% 미달 사유를 물은 질의서 찾아줘”</div>
+    <div><small>회신 확인</small>“그 질의서 회신 받았는지 확인해줘”</div>
+    <div><small>원본 파일명</small>“그 질의서 원본 파일명이 뭐야?”</div>
+  </div>
+  <p style="margin-top:14px">답에는 항상 <strong>카드 id와 원문 위치</strong>가 붙고, 목록에 없으면 없다고 답합니다. 수치는 원문 표기 그대로 전하며, 회신·이행은 카드에 기록된 것만 말합니다. 한글 원본은 읽지 않고 파일명만 알려 줍니다.</p>
+</section>
+
+<section aria-labelledby="install">
+  <h2 id="install">설치</h2>
+  <p>관리자 PC에는 스킬 두 개를, 팀원 PC에는 조회 스킬만 설치합니다.</p>
+  <div class="codewrap"><button class="copy" type="button" data-copy="clone">복사</button>
+<pre id="clone">git clone https://github.com/yongkyu4803/audit-question-archive.git
+cd audit-question-archive
+mkdir -p ~/.claude/skills</pre></div>
+  <p class="muted" style="margin-bottom:6px">관리자</p>
+  <div class="codewrap"><button class="copy" type="button" data-copy="admin">복사</button>
+<pre id="admin-cmd">cp -R skills/audit-question-sync skills/audit-question-lookup ~/.claude/skills/</pre></div>
+  <p class="muted" style="margin-bottom:6px">팀원</p>
+  <div class="codewrap"><button class="copy" type="button" data-copy="member">복사</button>
+<pre id="member-cmd">cp -R skills/audit-question-lookup ~/.claude/skills/</pre></div>
+  <p>준비물: Claude Code, Google Drive 연결, Python 3.10 이상, (관리자) Node.js 20 이상. 한글 문서는 <a href="https://github.com/chrisryugj/kordoc">kordoc</a>으로만 읽습니다.</p>
+</section>
+
+<section aria-labelledby="fname">
+  <h2 id="fname">원본 파일명 규칙</h2>
+  <p>한글 파일 안에는 상임위·질의자·제출일이 없습니다. 파일명이 규칙을 따르면 메타를 자동으로 읽고, 따르지 않으면 건마다 묻습니다.</p>
+  <div class="name" aria-label="파일명 예시"><b class="n1">2026-10-14</b>_<b class="n2">기획재정위원회</b>_<b class="n3">가나다진흥원</b>_<b class="n3">홍길동</b>_<b class="n1">서면질의</b><span class="muted">.hwpx</span></div>
+  <div class="scroll"><table>
+    <tr><th>제출일</th><td><code>YYYY-MM-DD</code> 또는 <code>YYYYMMDD</code></td></tr>
+    <tr><th>상임위 · 기관 · 질의자</th><td>공백과 밑줄 없이 붙여 씁니다</td></tr>
+    <tr><th>유형</th><td>본질의 · 서면질의 · 요구자료 · 보충질의 · 종합질의</td></tr>
+    <tr><th>버전</th><td>선택. 수정본은 <code>_v2</code>, <code>_v3</code> (생략하면 v1)</td></tr>
+  </table></div>
+  <p class="muted" style="margin-top:12px"><code>원본/</code>에 올린 파일은 이름을 바꾸지 않습니다. 수정본은 새 파일로 올립니다.</p>
+</section>
+
+<section aria-labelledby="rules">
+  <h2 id="rules">지키는 원칙</h2>
+  <ul class="rules">
+    <li><strong>확인 전에는 올리지 않습니다.</strong> 개인정보 확인은 사람이 하고, 비공개 건은 Drive에 올리지 않습니다.</li>
+    <li><strong>한글 원본은 팀원에게 공유하지 않습니다.</strong> <code>원본/</code>은 관리자 전용입니다.</li>
+    <li><strong>Drive 원본은 건드리지 않습니다.</strong> 이름 변경·이동·삭제 없이 내려받은 사본으로만 작업하고, 원본이 바뀌면 해시로 알립니다.</li>
+    <li><strong>한글 문서는 kordoc으로만 읽습니다.</strong> 없으면 다른 방법으로 대신하지 않고 멈춥니다.</li>
+    <li><strong>메타와 수치는 추측하지 않습니다.</strong> 파일명 규칙이나 관리자 확인, 원문에서 확인한 것만 적습니다.</li>
+    <li><strong>목록에 없으면 없다고 답합니다.</strong> 비슷한 다른 건을 같은 건처럼 말하지 않습니다.</li>
+  </ul>
+</section>
+
+</main>
+
+<footer>
+  예시의 질의서, 기관, 의원, 수치, Drive 파일 id는 모두 가상입니다. 자세한 설정과 운영 방법은 <a href="https://github.com/yongkyu4803/audit-question-archive#readme">README</a>를 보세요.
+</footer>
+</div>
+
+<script>
+(function () {
+  var map = { clone: 'clone', admin: 'admin-cmd', member: 'member-cmd' };
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var pre = document.getElementById(map[btn.getAttribute('data-copy')]);
+      if (!pre) return;
+      var text = pre.textContent;
+      function done(ok) { var old = btn.textContent; btn.textContent = ok ? '복사했습니다' : '직접 복사하세요'; setTimeout(function () { btn.textContent = old; }, 1800); }
+      function fallback() {
+        var r = document.createRange(); r.selectNodeContents(pre);
+        var s = window.getSelection(); s.removeAllRanges(); s.addRange(r); done(false);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { done(true); }, fallback);
+      } else { fallback(); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
